@@ -1,0 +1,630 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Physics-Based Creative Platform</title>
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<style>
+body { margin: 0; }
+canvas { display: block; }
+.control-panel {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  background-color: rgba(255, 255, 255, 0.8);
+  padding: 10px;
+  border-radius: 5px;
+}
+.property-editor {
+  display: none; /* Initially hidden */
+}
+.property-editor label {
+  display: block;
+}
+</style>
+</head>
+<body>
+
+<div class="control-panel">
+  <h3>Simulation Control</h3>
+  <button id="play-pause">Play</button>
+  <button id="step">Step</button>
+  <input type="range" id="speed" min="0.1" max="2" step="0.1" value="1"> Speed
+
+  <h3>Structure Editor</h3>
+  <button id="add-particle">Add Particle</button>
+  <button id="add-spring">Add Spring</button>
+  <button id="add-muscle">Add Muscle</button>
+
+  <h3>Property Editor</h3>
+  <div id="property-editor" class="property-editor">
+    <!-- Particle Properties -->
+    <div id="particle-properties">
+      <label for="property-x">X: <input type="number" id="property-x"></label>
+      <label for="property-y">Y: <input type="number" id="property-y"></label>
+      <label for="property-mass">Mass: <input type="number" id="property-mass"></label>
+      <label for="property-radius">Radius: <input type="number" id="property-radius"></label>
+      <label for="property-fixed">Fixed: <input type="checkbox" id="property-fixed"></label> 
+    </div>
+
+    <!-- Spring Properties -->
+    <div id="spring-properties">
+      <label for="property-restLength">Rest Length: <input type="number" id="property-restLength"></label>
+      <label for="property-stiffness">Stiffness: <input type="number" id="property-stiffness"></label>
+      <label for="property-damping">Damping: <input type="number" id="property-damping"></label>
+      <label for="property-breakingThreshold">Breaking Threshold: <input type="number" id="property-breakingThreshold"></label>
+    </div>
+
+    <!-- Muscle Properties -->
+    <div id="muscle-properties">
+      <label for="property-restLength-muscle">Rest Length: <input type="number" id="property-restLength-muscle"></label>
+      <label for="property-stiffness-muscle">Stiffness: <input type="number" id="property-stiffness-muscle"></label>
+      <label for="property-damping-muscle">Damping: <input type="number" id="property-damping-muscle"></label>
+      <label for="property-breakingThreshold-muscle">Breaking Threshold: <input type="number" id="property-breakingThreshold-muscle"></label>
+      <label for="property-oscillationFrequency">Oscillation Frequency: <input type="number" id="property-oscillationFrequency"></label>
+      <label for="property-oscillationAmplitude">Oscillation Amplitude: <input type="number" id="property-oscillationAmplitude"></label> 
+      <!-- Add more muscle-specific property input fields here if needed --> 
+    </div>
+
+    <button id="apply-properties">Apply</button>
+  </div>
+</div>
+
+<canvas id="simulationCanvas"></canvas>
+
+<script>
+// --- Global Variables ---
+const canvas = document.getElementById('simulationCanvas');
+const ctx = canvas.getContext('2d');
+canvas.width = 800;
+canvas.height = 600;
+
+let simulationRunning = false;
+let simulationSpeed = 1;
+let mouseDown = false;
+let selectedObject = null; // Can be a particle, spring, or muscle
+let tempSpringStart = null;
+let lastAddedParticle = null; // Track the last added particle for easy connection
+
+// --- Data Structures ---
+let particles = [];
+let springs = [];
+let muscles = []; 
+
+// --- Initialization ---
+function init() {
+  // Example initial particles and connections 
+  particles.push({x: 200, y: 200, vx: 0, vy: 0, mass: 1, radius: 5, fixed: false});
+  particles.push({x: 250, y: 200, vx: 0, vy: 0, mass: 1, radius: 5, fixed: false});
+  springs.push({p1: 0, p2: 1, restLength: 50, stiffness: 0.1, damping: 0.05, breakingThreshold: 100}); 
+}
+
+// --- Physics Engine ---
+function applyForces() {
+  // 1. Gravity 
+  particles.forEach(p => {
+    if (!p.fixed) {
+      p.vy += 0.1; // Example gravity 
+    }
+  });
+
+  // 2. Spring Forces
+  springs.forEach(s => {
+    let p1 = particles[s.p1];
+    let p2 = particles[s.p2];
+    let dx = p2.x - p1.x;
+    let dy = p2.y - p1.y;
+    let distance = Math.sqrt(dx*dx + dy*dy);
+    let force = s.stiffness * (distance - s.restLength);
+
+    // Apply damping 
+    let dampingForceX = -s.damping * (p2.vx - p1.vx);
+    let dampingForceY = -s.damping * (p2.vy - p1.vy);
+
+    let fx = force * dx / distance + dampingForceX;
+    let fy = force * dy / distance + dampingForceY;
+
+    if (!p1.fixed) {
+      p1.vx += fx / p1.mass;
+      p1.vy += fy / p1.mass;
+    }
+    if (!p2.fixed) {
+      p2.vx -= fx / p2.mass;
+      p2.vy -= fy / p2.mass;
+    }
+
+    // Spring breaking (example) 
+    if (distance > s.breakingThreshold) {
+      springs.splice(springs.indexOf(s), 1);
+    }
+  });
+
+  // 3. Muscle Forces (similar to springs, but with oscillating force)
+  muscles.forEach(m => {
+    let p1 = particles[m.p1];
+    let p2 = particles[m.p2];
+    let dx = p2.x - p1.x;
+    let dy = p2.y - p1.y;
+    let distance = Math.sqrt(dx*dx + dy*dy);
+    let force = m.stiffness * (distance - m.restLength); 
+
+    // Example sine wave oscillation for muscle
+    force += m.oscillationAmplitude * Math.sin(Date.now() * m.oscillationFrequency / 1000); 
+
+    let fx = force * dx / distance;
+    let fy = force * dy / distance;
+
+    if (!p1.fixed) {
+      p1.vx += fx / p1.mass;
+      p1.vy += fy / p1.mass;
+    }
+    if (!p2.fixed) {
+      p2.vx -= fx / p2.mass;
+      p2.vy -= fy / p2.mass;
+    }
+  }); 
+}
+
+function updatePositions(dt) {
+  particles.forEach(p => {
+    if (!p.fixed) {
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+
+      // Basic boundary collisions
+      if (p.x + p.radius > canvas.width) {
+        p.x = canvas.width - p.radius;
+        p.vx *= -0.7; // Some bounce
+      } else if (p.x - p.radius < 0) {
+        p.x = p.radius;
+        p.vx *= -0.7; 
+      }
+      if (p.y + p.radius > canvas.height) {
+        p.y = canvas.height - p.radius;
+        p.vy *= -0.7;
+      } else if (p.y - p.radius < 0) {
+        p.y = p.radius;
+        p.vy *= -0.7; 
+      } 
+    }
+  });
+}
+
+
+// --- Collision Detection ---
+function checkParticleCollisions() {
+  for (let i = 0; i < particles.length; i++) {
+    for (let j = i + 1; j < particles.length; j++) {
+      let p1 = particles[i];
+      let p2 = particles[j];
+      let dx = p2.x - p1.x;
+      let dy = p2.y - p1.y;
+      let distance = Math.sqrt(dx * dx + dy * dy);
+
+      if (distance < p1.radius + p2.radius) {
+        // Collision! Basic resolution: move particles apart
+        let overlap = p1.radius + p2.radius - distance;
+        let nx = dx / distance;
+        let ny = dy / distance;
+
+        if (!p1.fixed) {
+          p1.x -= overlap * nx * 0.5;
+          p1.y -= overlap * ny * 0.5;
+        }
+
+        if (!p2.fixed) {
+          p2.x += overlap * nx * 0.5;
+          p2.y += overlap * ny * 0.5;
+        }
+      }
+    }
+  }
+}
+
+// --- Rendering ---
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height); 
+
+  springs.forEach(s => {
+    let p1 = particles[s.p1];
+    let p2 = particles[s.p2];
+    ctx.beginPath();
+    ctx.moveTo(p1.x, p1.y);
+    ctx.lineTo(p2.x, p2.y);
+    ctx.stroke();
+  });
+
+  muscles.forEach(m => {
+    let p1 = particles[m.p1];
+    let p2 = particles[m.p2];
+    ctx.beginPath();
+    ctx.moveTo(p1.x, p1.y);
+    ctx.lineTo(p2.x, p2.y);
+    ctx.strokeStyle = "red"; // Example muscle color 
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.strokeStyle = "black";
+    ctx.lineWidth = 1;
+  });
+
+  particles.forEach(p => {
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+    ctx.fill(); 
+  });
+
+  // Draw temporary spring while creating
+  if (tempSpringStart !== null) {
+    ctx.beginPath();
+    ctx.moveTo(particles[tempSpringStart].x, particles[tempSpringStart].y);
+    ctx.lineTo(mouseX, mouseY);
+    ctx.strokeStyle = "gray";
+    ctx.stroke();
+    ctx.strokeStyle = "black";
+  }
+
+  // Highlight selected object
+  if (selectedObject !== null) {
+    if (selectedObject.type === 'particle') {
+      let p = particles[selectedObject.index];
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.radius + 2, 0, Math.PI * 2);
+      ctx.strokeStyle = "yellow";
+      ctx.stroke();
+    } else if (selectedObject.type === 'spring' || selectedObject.type === 'muscle') {
+      let obj = (selectedObject.type === 'spring') ? springs[selectedObject.index] : muscles[selectedObject.index];
+      let p1 = particles[obj.p1];
+      let p2 = particles[obj.p2];
+      ctx.beginPath();
+      ctx.moveTo(p1.x, p1.y);
+      ctx.lineTo(p2.x, p2.y);
+      ctx.strokeStyle = "yellow";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.lineWidth = 1; 
+    }
+  }
+}
+
+// --- Simulation Loop ---
+function simulate() {
+  let dt = 0.016 * simulationSpeed; // Assuming 60fps base
+  applyForces();
+  updatePositions(dt);
+  checkParticleCollisions();
+  draw();
+
+  if (simulationRunning) {
+    requestAnimationFrame(simulate);
+  }
+}
+
+// --- UI Helper Functions ---
+function showPropertyEditor(objectType, objectIndex) {
+  const editor = document.getElementById('property-editor');
+  editor.style.display = 'block';
+
+  // Hide all property sections
+  document.getElementById('particle-properties').style.display = 'none';
+  document.getElementById('spring-properties').style.display = 'none';
+  document.getElementById('muscle-properties').style.display = 'none';
+
+  // Show the relevant section based on object type
+  if (objectType === 'particle') {
+    let p = particles[objectIndex];
+    document.getElementById('particle-properties').style.display = 'block';
+    document.getElementById('property-x').value = p.x;
+    document.getElementById('property-y').value = p.y;
+    document.getElementById('property-mass').value = p.mass;
+    document.getElementById('property-radius').value = p.radius;
+    document.getElementById('property-fixed').checked = p.fixed;
+  } else if (objectType === 'spring') {
+    let s = springs[objectIndex];
+    document.getElementById('spring-properties').style.display = 'block';
+    document.getElementById('property-restLength').value = s.restLength;
+    document.getElementById('property-stiffness').value = s.stiffness;
+    document.getElementById('property-damping').value = s.damping;
+    document.getElementById('property-breakingThreshold').value = s.breakingThreshold;
+  } else if (objectType === 'muscle') {
+    let m = muscles[objectIndex];
+    document.getElementById('muscle-properties').style.display = 'block';
+    document.getElementById('property-restLength-muscle').value = m.restLength;
+    document.getElementById('property-stiffness-muscle').value = m.stiffness;
+    document.getElementById('property-damping-muscle').value = m.damping;
+    document.getElementById('property-breakingThreshold-muscle').value = m.breakingThreshold;
+    document.getElementById('property-oscillationFrequency').value = m.oscillationFrequency;
+    document.getElementById('property-oscillationAmplitude').value = m.oscillationAmplitude;
+    // ... Populate other muscle properties 
+  }
+}
+
+function hidePropertyEditor() {
+  document.getElementById('property-editor').style.display = 'none';
+}
+
+// --- Event Handlers --- 
+let mouseX, mouseY; 
+canvas.addEventListener('mousedown', (e) => {
+  mouseDown = true;
+  mouseX = e.offsetX;
+  mouseY = e.offsetY;
+
+  // Check for object selection 
+  selectedObject = null;
+  for (let i = 0; i < particles.length; i++) {
+    let p = particles[i];
+    let dx = p.x - mouseX;
+    let dy = p.y - mouseY;
+    if (dx*dx + dy*dy <= p.radius*p.radius) {
+      selectedObject = {type: 'particle', index: i};
+      showPropertyEditor('particle', i);
+      break;
+    }
+  }
+
+  // Check for spring selection (example - needs improvement for overlapping springs)
+  if (selectedObject === null) {
+    for (let i = 0; i < springs.length; i++) {
+      let s = springs[i];
+      let p1 = particles[s.p1];
+      let p2 = particles[s.p2];
+      // Check if mouse click is near the spring line
+      if (pointToLineSegmentDistance(mouseX, mouseY, p1.x, p1.y, p2.x, p2.y) < 5) { // 5 is the tolerance 
+        selectedObject = {type: 'spring', index: i};
+        showPropertyEditor('spring', i);
+        break;
+      }
+    }
+  }
+
+  // Check for muscle selection
+  if (selectedObject === null) {
+    for (let i = 0; i < muscles.length; i++) {
+      let m = muscles[i];
+      let p1 = particles[m.p1];
+      let p2 = particles[m.p2];
+
+      // Check if mouse click is near the muscle line
+      if (pointToLineSegmentDistance(mouseX, mouseY, p1.x, p1.y, p2.x, p2.y) < 5) { // 5 is the tolerance
+        selectedObject = {type: 'muscle', index: i};
+        showPropertyEditor('muscle', i);
+        break;
+      }
+    }
+  }
+
+
+  // If no object selected, initiate particle creation and automatic connection
+  if (selectedObject === null) {
+    let newParticleIndex = particles.push({
+      x: mouseX,
+      y: mouseY,
+      vx: 0,
+      vy: 0,
+      mass: 1, 
+      radius: 5, 
+      fixed: false
+    }) - 1; // Subtract 1 to get the index
+
+    if (lastAddedParticle !== null) {
+      springs.push({
+        p1: lastAddedParticle,
+        p2: newParticleIndex,
+        restLength: 50, // Default values
+        stiffness: 0.1,
+        damping: 0.05,
+        breakingThreshold: 100
+      });
+    }
+
+    lastAddedParticle = newParticleIndex;
+  }
+});
+
+canvas.addEventListener('mousemove', (e) => {
+  mouseX = e.offsetX; 
+  mouseY = e.offsetY;
+
+  if (mouseDown && selectedObject !== null && selectedObject.type === 'particle') {
+    particles[selectedObject.index].x = mouseX;
+    particles[selectedObject.index].y = mouseY;
+
+    // Update property editor if particle is being dragged
+    document.getElementById('property-x').value = mouseX;
+    document.getElementById('property-y').value = mouseY;
+  }
+});
+
+canvas.addEventListener('mouseup', (e) => {
+  mouseDown = false;
+
+  // If a particle was being dragged, update its properties in the data structure
+  if (selectedObject !== null && selectedObject.type === 'particle') {
+    particles[selectedObject.index].x = parseFloat(document.getElementById('property-x').value);
+    particles[selectedObject.index].y = parseFloat(document.getElementById('property-y').value);
+  }
+
+  selectedObject = null;
+});
+
+
+document.getElementById('play-pause').addEventListener('click', () => {
+  simulationRunning = !simulationRunning;
+  document.getElementById('play-pause').textContent = simulationRunning ? 'Pause' : 'Play';
+  if (simulationRunning) {
+    simulate();
+  }
+});
+
+document.getElementById('step').addEventListener('click', () => {
+  simulationRunning = false;
+  document.getElementById('play-pause').textContent = 'Play';
+  simulate(); 
+});
+
+document.getElementById('speed').addEventListener('input', () => {
+  simulationSpeed = document.getElementById('speed').value;
+});
+
+document.getElementById('add-particle').addEventListener('click', () => {
+  let newParticleIndex = particles.push({
+    x: Math.random() * canvas.width,
+    y: Math.random() * canvas.height,
+    vx: 0,
+    vy: 0,
+    mass: 1, 
+    radius: 5, 
+    fixed: false
+  }) - 1;
+
+  if (lastAddedParticle !== null) {
+    springs.push({
+      p1: lastAddedParticle,
+      p2: newParticleIndex,
+      restLength: 50, // Default values
+      stiffness: 0.1,
+      damping: 0.05,
+      breakingThreshold: 100
+    });
+  }
+
+  lastAddedParticle = newParticleIndex;
+});
+
+document.getElementById('add-spring').addEventListener('click', () => {
+  let p1Index = null;
+  let p2Index = null;
+
+  function handleSpringCreationClick(e) {
+    let mouseX = e.offsetX;
+    let mouseY = e.offsetY;
+    for (let i = 0; i < particles.length; i++) {
+      let p = particles[i];
+      let dx = p.x - mouseX;
+      let dy = p.y - mouseY;
+      if (dx * dx + dy * dy <= p.radius * p.radius) {
+        if (p1Index === null) {
+          p1Index = i;
+        } else if (p2Index === null && i !== p1Index) {
+          p2Index = i;
+          canvas.removeEventListener('click', handleSpringCreationClick);
+          createSpring(p1Index, p2Index);
+          break;
+        }
+      }
+    }
+  }
+
+  function createSpring(p1, p2) {
+    springs.push({
+      p1: p1,
+      p2: p2,
+      restLength: 50,
+      stiffness: 0.1,
+      damping: 0.05,
+      breakingThreshold: 100
+    });
+  }
+
+  canvas.addEventListener('click', handleSpringCreationClick);
+});
+
+
+document.getElementById('add-muscle').addEventListener('click', () => {
+  let p1Index = null;
+  let p2Index = null;
+
+  function handleMuscleCreationClick(e) {
+    let mouseX = e.offsetX;
+    let mouseY = e.offsetY;
+    for (let i = 0; i < particles.length; i++) {
+      let p = particles[i];
+      let dx = p.x - mouseX;
+      let dy = p.y - mouseY;
+      if (dx * dx + dy * dy <= p.radius * p.radius) {
+        if (p1Index === null) {
+          p1Index = i;
+        } else if (p2Index === null && i !== p1Index) {
+          p2Index = i;
+          canvas.removeEventListener('click', handleMuscleCreationClick);
+          createMuscle(p1Index, p2Index);
+          break;
+        }
+      }
+    }
+  }
+
+  function createMuscle(p1, p2) {
+    muscles.push({
+      p1: p1,
+      p2: p2,
+      restLength: 50,
+      stiffness: 0.1,
+      damping: 0.05,
+      breakingThreshold: 100,
+      // Add muscle-specific properties here (oscillation frequency, amplitude, etc.)
+      oscillationFrequency: 1, // Example
+      oscillationAmplitude: 10 // Example 
+    });
+  }
+
+  canvas.addEventListener('click', handleMuscleCreationClick);
+});
+
+
+document.getElementById('apply-properties').addEventListener('click', () => {
+  if (selectedObject !== null) {
+    if (selectedObject.type === 'particle') {
+      let p = particles[selectedObject.index];
+      p.x = parseFloat(document.getElementById('property-x').value);
+      p.y = parseFloat(document.getElementById('property-y').value);
+      p.mass = parseFloat(document.getElementById('property-mass').value);
+      p.radius = parseFloat(document.getElementById('property-radius').value);
+      p.fixed = document.getElementById('property-fixed').checked; 
+    } else if (selectedObject.type === 'spring') {
+      let s = springs[selectedObject.index];
+      s.restLength = parseFloat(document.getElementById('property-restLength').value);
+      s.stiffness = parseFloat(document.getElementById('property-stiffness').value);
+      s.damping = parseFloat(document.getElementById('property-damping').value);
+      s.breakingThreshold = parseFloat(document.getElementById('property-breakingThreshold').value);
+    } else if (selectedObject.type === 'muscle') {
+      let m = muscles[selectedObject.index];
+      m.restLength = parseFloat(document.getElementById('property-restLength-muscle').value);
+      m.stiffness = parseFloat(document.getElementById('property-stiffness-muscle').value);
+      m.damping = parseFloat(document.getElementById('property-damping-muscle').value);
+      m.breakingThreshold = parseFloat(document.getElementById('property-breakingThreshold-muscle').value);
+      m.oscillationFrequency = parseFloat(document.getElementById('property-oscillationFrequency').value);
+      m.oscillationAmplitude = parseFloat(document.getElementById('property-oscillationAmplitude').value);
+      // ... Apply other muscle properties
+    }
+  }
+  hidePropertyEditor(); // Hide after applying
+});
+
+// Helper function to calculate distance from point to line segment
+function pointToLineSegmentDistance(px, py, x1, y1, x2, y2) {
+  let dx = x2 - x1;
+  let dy = y2 - y1;
+  let t = ((px - x1) * dx + (py - y1) * dy) / (dx * dx + dy * dy);
+
+  if (t < 0) {
+    dx = px - x1;
+    dy = py - y1;
+  } else if (t > 1) {
+    dx = px - x2;
+    dy = py - y2;
+  } else {
+    dx = px - (x1 + t * dx);
+    dy = py - (y1 + t * dy);
+  }
+
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
+// --- Start --- 
+init();
+draw(); 
+</script>
+
+</body>
+</html>
